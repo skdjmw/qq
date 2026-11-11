@@ -2284,8 +2284,17 @@ end
 ---------------------------------------------------------------------
 -- AKSI DASAR: place & pukul
 ---------------------------------------------------------------------
+-- Penanda "seed di tangan" milik game (World.seedHeld, dump refdbg5). Renderer
+-- tangan memakainya untuk pose tanam. Visual saja; aksi non-seed dan stop sesi
+-- mengembalikannya supaya klik manual tidak ikut berubah perilaku.
+local function setSeedHeld(on)
+    if Refs.World then pcall(rawset, Refs.World, "seedHeld", on == true) end
+end
+
 local function sendSetTile(layer, x, y, id, requireWorldConfirmation)
     if id ~= 0 and State.Visual and Anim.place then Anim.place(x, y, id) end
+    local itSend = (id ~= 0) and ItemDB[id] or nil
+    setSeedHeld(itSend ~= nil and itSend.kind == "seed")
     if Refs.SetTile then
         local ok, err = pcall(Refs.SetTile, layer, x, y, id, false, false)
         if ok then return true end
@@ -2414,6 +2423,7 @@ local function tryBreak(x, y, includeBg)
     end
 
     if Refs.Punch then
+        setSeedHeld(false) -- punch tidak boleh terbaca tanam bila flag seed masih aktif
         local ok, err = pcall(Refs.Punch, x, y, State.MutePunch or nil, nil)
         if not ok then
             State.LastAction = "Error pukul: " .. tostring(err)
@@ -3354,6 +3364,7 @@ local function setRunningVisual()
 end
 
 stopFarm = function(reason)
+    setSeedHeld(false)
     State.Running = false
     setRunningVisual()
     if reason and not State.Quiet then
@@ -5024,6 +5035,7 @@ local function setClearVisual()
 end
 
 stopClear = function(reason)
+    setSeedHeld(false)
     Clear.Running = false
     autoEnd()
     setClearVisual()
@@ -5759,6 +5771,7 @@ local function setFarmerVisual()
 end
 
 stopFarmer = function(reason)
+    setSeedHeld(false)
     Farmer.Running = false
     autoEnd()
     setFarmerVisual()
@@ -6926,6 +6939,7 @@ function Pabrik.stop(reason)
     pabrikEvent(nil, "stop", reason or "dihentikan")
     Pabrik.Running = false
     Pabrik.Traveling = false
+    setSeedHeld(false)
     Pabrik.ResumePhase, Pabrik.PauseReason = nil, nil
     Move.NoZone = false
     if State.Override then State.Running = false end
@@ -12991,6 +13005,7 @@ Session.Cleanup = function()
     Clear.Running = false
     Farmer.Running = false
     Spam.On = false
+    if Refs.World then pcall(rawset, Refs.World, "seedHeld", false) end
     if Config.AutoSave then pcall(Config.save, false) end -- simpan sebelum ditutup
     Guard.On = false
     Bonus.Quest, Bonus.Redeem = false, false
