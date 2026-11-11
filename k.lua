@@ -3991,9 +3991,9 @@ end
 function Anim.place(x, y, id)
     local it = ItemDB[id]
     local seed = it and it.kind == "seed"
-    -- Game memakai kind "seed" saat menanam (konstanta handler input punch);
-    -- ikuti supaya pose tangan sama dengan tanam manual. Block tetap "build".
-    Anim.swing(x, y, seed and "seed" or "build")
+    -- Nilai kind game: "plant" saat menanam, "build" saat memasang block
+    -- (tabel aksi hidup arm#1 up[5] di dump refdbg6: kind = "plant").
+    Anim.swing(x, y, seed and "plant" or "build")
     if not seed then Anim.puff(x, y) end
 end
 
