@@ -28,7 +28,7 @@ if type(identifyexecutor) == "function" then
 	local okEx, nameEx = pcall(identifyexecutor)
 	if okEx and type(nameEx) == "string" then exName = nameEx end
 end
-say("mulai | executor: " .. exName)
+say("mulai | executor: " .. exName .. " — biarkan jalan sampai muncul 'selesai', jangan tutup console")
 
 ---------------------------------------------------------------------
 -- 0) Registry module game (Shared)
@@ -275,12 +275,10 @@ else
 	say("Executor tidak punya setclipboard/toclipboard — salin manual dari konsol.")
 end
 if type(writefile) == "function" then
-	local okW, errW = pcall(writefile, "Rocky_refdbg.txt", text)
-	if okW then
-		say("Output juga disimpan ke file: Rocky_refdbg.txt (folder workspace executor)")
-	else
-		say("writefile gagal: " .. tostring(errW))
-	end
+	savePartial()
+	say("Output disimpan: Rocky_refdbg.lua & Rocky_refdbg.txt (folder workspace executor; cek daftar file/script di Delta)")
+else
+	say("Executor tidak punya writefile — pakai clipboard atau copy pesan konsol.")
 end
 -- Cetak sekali lagi sebagai SATU pesan konsol agar mudah di-select lalu copy.
 print(text)
