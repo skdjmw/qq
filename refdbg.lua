@@ -8,13 +8,19 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local nPrint = 0
-local out = {} -- semua baris disimpan untuk clipboard/file di akhir
+local out = {} -- semua baris disimpan untuk clipboard/file
+local function savePartial()
+	if type(writefile) ~= "function" then return end
+	local text = table.concat(out, "\n")
+	pcall(writefile, "Rocky_refdbg.lua", text) -- .lua: tampil di daftar script Delta
+	pcall(writefile, "Rocky_refdbg.txt", text)
+end
 local function say(s)
 	s = "[Rocky][REFDBG] " .. tostring(s)
 	out[#out + 1] = s
 	nPrint += 1
 	print(s)
-	if nPrint % 10 == 0 then task.wait() end
+	if nPrint % 10 == 0 then savePartial(); task.wait() end -- save berkala: crash pun tetap ada
 end
 
 local exName = "-"
