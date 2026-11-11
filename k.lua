@@ -344,7 +344,6 @@ local Pabrik = {
     Running = false,
     SeedId = nil,
     BlockId = nil,
-    WholeWorld = false,  -- tanam & panen di seluruh world (bukan hanya lahan)
     SupportFilter = false, -- Pabrik saja: tanam hanya di atas block tertentu
     SupportId = nil,       -- ItemId block penyangga (bukan nama tampilan)
     Tiles = {},          -- tile break, relatif ke posisi break ("dx,dy")
@@ -355,28 +354,19 @@ local Pabrik = {
     DropAt = 200,        -- drop kalau seed sudah sebanyak ini
     DropWorld = "",      -- "" = world ini | "WORLD" | "WORLD:ID"
     DropX = -1, DropY = -1,
-    BlockStoreAt = 170,   -- mulai simpan block sebelum limit item
-    BlockKeep = 30,       -- block yang disisakan saat store
-    RefillAt = 10,        -- batas rendah yang memicu refill (tahap storage)
-    RefillTarget = 150,   -- target block setelah refill
     InventoryCap = 190,   -- batas aman internal Pabrik; bukan config pengguna
-    StorageWorld = "",    -- world storage block; kosong = world saat ini
-    StorageX = -1, StorageY = -1,
     Harvested = 0,
     Planted = 0,
     Dropped = 0,
-    StoredBlocks = 0,
-    RefilledBlocks = 0,
     Skip = {},
     Status = "-",
     Traveling = false,
     Home = "",
     Zone = nil,          -- tempat drop (tidak ikut di-collect), dipakai semua fitur drop
-    BlockStorageZone = nil, -- zona block storage, terpisah dari drop seed
     Row = {},            -- baris tanam yang sedang dikerjakan
     Events = {},         -- observability Pabrik; ring buffer, tidak dipersistenkan
     LastTransition = "-",
-    ResumePhase = nil,   -- dipakai interupsi sementara seperti storage/refill
+    ResumePhase = nil,   -- dipakai interupsi sementara seperti drop seed
     PauseReason = nil,
     TreeSummary = nil,
     UnreachableCount = 0,
@@ -804,22 +794,6 @@ I18N.EN = {
     ["Untuk ditanam lagi"] = "For replanting",
     ["Drop kalau seed sudah"] = "Drop when seeds reach",
     ["Contoh 200 & sisakan 50 = drop 150"] = "Example 200 & keep 50 = drop 150",
-    ["Inventory block"] = "Block inventory",
-    ["Simpan block saat"] = "Store blocks at",
-    ["Pabrik pause sampai Block Storage tersedia"] = "Factory pauses until Block Storage is available",
-    ["Sisakan block storage"] = "Blocks to keep in inventory",
-    ["Jumlah block yang nanti dipertahankan saat Auto Store"] = "Blocks kept in inventory during Auto Store",
-    ["Refill saat block <="] = "Refill when blocks <=",
-    ["Ambang untuk Auto Refill pada fase BREAK"] = "Auto Refill threshold during BREAK",
-    ["Target refill block"] = "Block refill target",
-    ["Jumlah block yang dituju setelah Auto Refill"] = "Target block count after Auto Refill",
-    ["Block Storage"] = "Block Storage",
-    ["World Block Storage"] = "Block Storage world",
-    ["Kosong = world Pabrik ini | WORLD | WORLD:ID"] = "Empty = this Factory world | WORLD | WORLD:ID",
-    ["Set posisi Block Storage sekarang"] = "Set current Block Storage position",
-    ["Berdiri di titik aman, di luar Break Grid dan jalur kerja"] = "Stand in a safe spot outside the Break Grid and work path",
-    ["Hapus Block Storage"] = "Clear Block Storage",
-    ["Auto Store dan Auto Refill akan pause sampai titik diatur lagi"] = "Auto Store and Auto Refill pause until a point is set again",
     ["World drop"] = "Drop world",
     ["Kosong = world ini | WORLD | WORLD:ID (masuk lewat pintu ID)"] = "Empty = this world | WORLD | WORLD:ID (enter via door ID)",
     ["Pakai posisi sekarang untuk drop"] = "Use current position for dropping",
@@ -1375,11 +1349,9 @@ Config.add("Lahan", Land, { "X0", "X1", "Y0" })
 Config.add("Bangun", Build, { "BlockId", "ThenPabrik", "BreakX", "BreakY", "Tiles" })
 Config.add("Vending", Vend, { "Mode", "Point", "Items", "DropX", "DropY" })
 Config.add("Pabrik", Pabrik, {
-    "SeedId", "WholeWorld", "Tiles", "BreakX", "BreakY",
+    "SeedId", "Tiles", "BreakX", "BreakY",
     "SupportFilter", "SupportId",
     "Drop", "Keep", "DropAt", "DropWorld", "DropX", "DropY",
-    "BlockStoreAt", "BlockKeep", "RefillAt", "RefillTarget",
-    "StorageWorld", "StorageX", "StorageY",
 })
 Config.add("Bahasa", I18N, { "Saved", "Ask" })
 I18N.Lang = (I18N.Saved == "en") and "en" or "id"
@@ -2088,24 +2060,23 @@ local function supportBlockLabels()
     end
     local w = Refs.World
     if w and type(w.fg) == "table" and type(w.w) == "number" and type(w.h) == "number" then
-        local x0, x1 = 0, w.w - 1
-        local y0, y1 = 0, w.h - 1
-        if not Pabrik.WholeWorld then
-            x0 = math.clamp(math.floor(math.min(Land.X0, Land.X1)), 0, w.w - 1)
-            x1 = math.clamp(math.floor(math.max(Land.X0, Land.X1)), 0, w.w - 1)
-            y0 = math.clamp(math.floor(Land.Y0), 0, w.h - 1)
-            y1 = math.clamp(math.floor(Land.Y0 + math.max(0, Land.Rows - 1) * Land.Gap), 0, w.h - 1)
+        -- Kandidat support kini mengikuti strip Pabrik: baris break + baris pijakannya.
+        -- Kalau posisi break belum diatur, tampilkan kandidat dari seluruh world.
+        local x0, x1, y0, y1 = 0, w.w - 1, 0, w.h - 1
+        if Pabrik.BreakY >= 0 and Pabrik.BreakX >= 0 then
+            x0 = math.clamp(Pabrik.BreakX + 1, 0, w.w - 1)
+            x1 = w.w - 1
+            y0 = math.clamp(Pabrik.BreakY, 0, w.h - 1)
+            y1 = math.clamp(Pabrik.BreakY + 1, 0, w.h - 1)
         end
         for y = y0, y1 do
             local row = w.fg[y]
             local above = y > 0 and w.fg[y - 1] or nil
             if row and above then
-                if Pabrik.WholeWorld or ((y - Land.Y0) % math.max(1, Land.Gap) == 0) then
-                    for x = x0, x1 do
-                        local topId = above[x]
-                        local topItem = topId and ItemDB[topId] or nil
-                        if topId == 0 or (topItem and topItem.kind == "seed") then add(row[x]) end
-                    end
+                for x = x0, x1 do
+                    local topId = above[x]
+                    local topItem = topId and ItemDB[topId] or nil
+                    if topId == 0 or (topItem and topItem.kind == "seed") then add(row[x]) end
                 end
             end
         end
@@ -2862,10 +2833,9 @@ local function inTile(t, x, y)
 end
 
 local function inPabrikProtectedZone(d, world)
-    for _, z in ipairs({ Pabrik.Zone, Pabrik.BlockStorageZone }) do
-        if z and z.world == world and math.abs(d.x - z.x) <= 2.5 and math.abs(d.y - z.y) <= 2.5 then
-            return true
-        end
+    local z = Pabrik.Zone
+    if z and z.world == world and math.abs(d.x - z.x) <= 2.5 and math.abs(d.y - z.y) <= 2.5 then
+        return true
     end
     return false
 end
@@ -6300,19 +6270,25 @@ end
 ---------------------------------------------------------------------
 -- PABRIK
 ---------------------------------------------------------------------
--- Flow utama: VALIDATE -> BREAK -> PLANT -> WAIT_GROWTH -> HARVEST -> BREAK.
--- STORE_BLOCK dan REFILL_BLOCK menginterupsi fase utama lalu kembali melalui
--- ResumePhase; kegagalan yang tidak aman masuk PAUSED dengan alasan eksplisit.
--- Batas inventory Pabrik berasal dari pabrikInventoryPolicy(), bukan asumsi 200.
+-- Flow utama: VALIDATE -> PANEN -> BREAK -> TANAM -> WAIT_GROWTH -> PANEN -> ULANGI.
+-- Block habis di BREAK langsung loncat ke TANAM (kalau ada seed) atau PANEN;
+-- kegagalan yang tidak aman masuk PAUSED dengan alasan eksplisit.
+-- Batas inventory Pabrik memakai Pabrik.InventoryCap, bukan asumsi 200.
 local CAP = 190       -- batas aman jumlah item (maksimal 200 per item)
 
-local function pabrikInventoryPolicy()
-    local cap = math.max(1, math.floor(tonumber(Pabrik.InventoryCap) or 190))
-    local storeAt = math.clamp(math.floor(tonumber(Pabrik.BlockStoreAt) or 170), 1, cap)
-    local keep = math.clamp(math.floor(tonumber(Pabrik.BlockKeep) or 30), 0, storeAt - 1)
-    local refillAt = math.clamp(math.floor(tonumber(Pabrik.RefillAt) or 10), 0, cap - 1)
-    local refillTarget = math.clamp(math.floor(tonumber(Pabrik.RefillTarget) or 150), refillAt + 1, cap)
-    return { storeAt = storeAt, keep = keep, refillAt = refillAt, refillTarget = refillTarget }
+-- Area kerja Pabrik: strip horizontal di baris break. y TIDAK pernah berubah:
+-- tanam & panen hanya di y == BreakY, x dari BreakX+1 sampai x terakhir world.
+local function pabrikStripOk(x, y)
+    return Pabrik.BreakY >= 0 and Pabrik.BreakX >= 0
+        and y == Pabrik.BreakY and x > Pabrik.BreakX
+end
+
+-- Tile tanam strip: [idx] = true (isi tile dicek lagi oleh scan: kosong + pijakan)
+local function pabrikStripPlantSet()
+    local set, w = {}, Refs.World
+    if not w or Pabrik.BreakY < 0 or Pabrik.BreakX < 0 then return set end
+    for x = Pabrik.BreakX + 1, w.w - 1 do set[Pabrik.BreakY * w.w + x] = true end
+    return set
 end
 
 -- Ringkasan target batch Pabrik. Hanya tree dengan ItemId seed yang dipilih
@@ -6327,7 +6303,7 @@ local function pabrikTreeSummary(o)
     for y = 0, w.h - 1 do
         local row = w.fg[y]
         for x = 0, w.w - 1 do
-            if (o.whole or inLandRect(x, y)) and row and row[x] == o.seed then
+            if pabrikStripOk(x, y) and row and row[x] == o.seed then
                 out.total += 1
                 local readyAt = treeReadyAt(x, y, o.seed)
                 if not readyAt then
@@ -6348,13 +6324,8 @@ local function pabrikTreeSummary(o)
 end
 
 local function pabrikCfg(o, harvest, plant)
-    local plantSet, area = nil, nil
     local supportEnabled = Pabrik.SupportFilter == true
     local supportId = supportEnabled and Pabrik.SupportId or nil
-    if not o.whole then
-        plantSet = landPlantSet()
-        area = inLandRect
-    end
     return {
         run = o.live,
         harvest = harvest,
@@ -6363,8 +6334,8 @@ local function pabrikCfg(o, harvest, plant)
         skip = Pabrik.Skip,
         hms = Farmer.HarvestMs,
         pms = Farmer.PlantMs,
-        area = area,
-        plantSet = plantSet,
+        area = pabrikStripOk,         -- strip: y tetap BreakY, x = BreakX+1..akhir
+        plantSet = pabrikStripPlantSet(),
         only = harvest and o.seed or nil,
         -- Predicate tambahan ini hanya dipasang oleh Pabrik. plantSpotOk tetap
         -- menjalankan semua validasi umum setelah predicate ini lolos.
@@ -6474,34 +6445,6 @@ local function parseDropTarget()
     name = string.upper(name):gsub("[^A-Z0-9]", "")
     if door == "" then door = nil end
     return name, door
-end
-
-local function parseStorageTarget()
-    local raw = tostring(Pabrik.StorageWorld or ""):gsub("%s", "")
-    local name, door = string.match(raw, "^([^:]*):(.+)$")
-    if not name then name = raw end
-    name = string.upper(name):gsub("[^A-Z0-9]", "")
-    if door == "" then door = nil end
-    return name, door
-end
-
-function Pabrik.storagePointSet()
-    return Pabrik.StorageX >= 0 and Pabrik.StorageY >= 0
-end
-
-local function refreshBlockStorageZone()
-    if not Pabrik.storagePointSet() then
-        Pabrik.BlockStorageZone = nil
-        return
-    end
-    local name = parseStorageTarget()
-    if name == "" then name = Guard.worldName() end
-    if name == "" then return end
-    Pabrik.BlockStorageZone = {
-        world = name,
-        x = Pabrik.StorageX + 0.5,
-        y = Pabrik.StorageY + 0.5,
-    }
 end
 
 -- Pindah world (lewat menu game), bisa langsung ke pintu tertentu
@@ -6618,96 +6561,6 @@ local function dropTrip(items, live, say)
 end
 Auto.dropTrip = dropTrip
 
--- Perjalanan storage khusus block. Aksi callback dijalankan hanya setelah titik
--- storage dicapai; home dikembalikan sebelum fase utama dilanjutkan.
-local function storageTrip(o, action)
-    if not Pabrik.storagePointSet() then return false, "Block Storage belum diatur" end
-    local home = Guard.worldName()
-    local name, door = parseStorageTarget()
-    if name == "" then name = home end
-    if name == "" then return false, "world Pabrik tidak diketahui" end
-    local away = name ~= home
-    local ok, why = true, nil
-    Pabrik.Traveling = true
-    if away or door then
-        Pabrik.Status = "Pergi ke Block Storage " .. name .. (door and (":" .. door) or "")
-        local entered, err = goWorld(name, door)
-        if not entered then ok, why = false, "gagal masuk world storage: " .. tostring(err) end
-    end
-    if ok and o.live() then
-        Pabrik.Status = ("Jalan ke Block Storage (%d,%d)"):format(Pabrik.StorageX, Pabrik.StorageY)
-        if not walkTo(Pabrik.StorageX, Pabrik.StorageY, 60) then
-            ok, why = false, "tidak bisa jalan ke Block Storage"
-        end
-    end
-    if ok and o.live() then
-        local s = playerState()
-        if s then
-            Pabrik.BlockStorageZone = { world = Guard.worldName(), x = s.x, y = s.y - 0.475 }
-        end
-        ok, why = action()
-    elseif ok then
-        ok, why = false, "sesi Pabrik dibatalkan saat menuju storage"
-    end
-    if away and home ~= "" and o.live() then
-        Pabrik.Status = "Pulang ke world Pabrik " .. home
-        local returned = goWorld(home, nil)
-        if not returned and o.live() then
-            task.wait(5)
-            returned = goWorld(home, nil)
-        end
-        if not returned then ok, why = false, "gagal pulang ke world Pabrik" end
-    end
-    Pabrik.Traveling = false
-    autoEnd()
-    return ok, why
-end
-
-local function pabrikStoreBlocks(o)
-    local policy = pabrikInventoryPolicy()
-    local before = invCount(o.block)
-    local want = before - policy.keep
-    if want <= 0 then return true, "block sudah sesuai jumlah simpan" end
-    local got = 0
-    local ok, why = storageTrip(o, function()
-        Pabrik.Status = ("Simpan %s x%d"):format(itemName(o.block), want)
-        local n, err = dropItems(o.block, want, o.live)
-        got = n
-        if n <= 0 then return false, err or "block tidak berhasil disimpan" end
-        if n < want then return false, ("hanya %d/%d block tersimpan"):format(n, want) end
-        return true, "block tersimpan"
-    end)
-    local after = invCount(o.block)
-    local changed = math.max(0, before - after)
-    if ok and changed <= 0 then return false, "inventory block tidak berubah setelah store" end
-    if changed > 0 then Pabrik.StoredBlocks += changed end
-    return ok, why
-end
-
-local function pabrikRefillBlocks(o)
-    local policy = pabrikInventoryPolicy()
-    local before = invCount(o.block)
-    local need = policy.refillTarget - before
-    if need <= 0 then return true, "stok block sudah memenuhi target refill" end
-    local ok, why = storageTrip(o, function()
-        Pabrik.Status = ("Ambil %s x%d dari Block Storage"):format(itemName(o.block), need)
-        Move.NoZone = true -- hanya selama refill dan tetap difilter ItemId target
-        local called, result = pcall(Move.fetchDrops, o.live, 8, function(d) return d.id == o.block end, 45)
-        Move.NoZone = false
-        if not called then return false, "error collect storage: " .. tostring(result) end
-        local got = math.max(0, invCount(o.block) - before)
-        if got < need then
-            return false, ("stok storage kurang: dapat %d dari %d block yang dibutuhkan"):format(got, need)
-        end
-        return true, ("ambil %d block dari storage"):format(got)
-    end)
-    local after = invCount(o.block)
-    local changed = math.max(0, after - before)
-    if ok and changed < need then return false, "inventory block tidak mencapai target refill" end
-    if changed > 0 then Pabrik.RefilledBlocks += changed end
-    return ok, why
-end
-
 -- Titik drop sudah diatur? (posisi, WORLD:ID, atau world lain)
 function Pabrik.pointSet()
     if Pabrik.DropX >= 0 then return true end
@@ -6766,7 +6619,6 @@ end)
 local PHASE_NAME = {
     validate = "VALIDATE", ["break"] = "BREAK", plant = "PLANT",
     wait_growth = "WAIT_GROWTH", harvest = "HARVEST", paused = "PAUSED",
-    store_block = "STORE_BLOCK", refill_block = "REFILL_BLOCK",
     panen = "PANEN", tanam = "TANAM", tunggu = "TUNGGU", -- dipakai Build
 }
 
@@ -6869,11 +6721,10 @@ local function breakReady()
     return Pabrik.BreakX >= 0 and next(Pabrik.Tiles) ~= nil and os.clock() >= (Pabrik.BreakFailUntil or 0)
 end
 
--- 1 langkah pabrik. o = { seed, block, drop, breakMode, whole, exclude, live, phase }
+-- 1 langkah pabrik. o = { seed, block, drop, breakMode, exclude, live, phase }
 -- Hasil: "drop" | "work" | "move" | "wait" | "break" | "next" | "idle" (+ detik ke pohon siap)
 local function pabrikStep(o)
     local seeds, blocks = invCount(o.seed), invCount(o.block)
-    local policy = pabrikInventoryPolicy()
     local cap = math.max(1, math.floor(tonumber(Pabrik.InventoryCap) or 190))
     if not o.phase then pabrikSetPhase(o, "validate", "mulai sesi") end
 
@@ -6898,39 +6749,23 @@ local function pabrikStep(o)
         local _, stateWhy = readStateRef(Refs.State, true)
         if stateWhy then return pause("posisi karakter tidak siap: " .. stateWhy) end
         if not o.seed or not o.block then return pause("seed atau block Pabrik tidak valid") end
-        if not o.whole and #landRows() == 0 then return pause("lahan belum diatur") end
         Pabrik.PauseReason = nil
-        pabrikSetPhase(o, "break", "validasi sesi selesai")
+        -- Siklus baru selalu dimulai dari awal: PANEN dulu (pohon siap dipanen,
+        -- hasilnya block + seed), baru BREAK, lalu TANAM, dan ulangi.
+        pabrikSetPhase(o, "harvest", "mulai siklus dari PANEN")
         return "next"
     end
 
     if o.phase == "paused" then return "paused" end
 
-    if o.phase == "store_block" then
-        local resume = o.resumePhase or Pabrik.ResumePhase or "harvest"
-        local ok, why = pabrikStoreBlocks(o)
-        if not ok then return pause(why or "Auto Store Blocks gagal") end
-        o.resumePhase, Pabrik.ResumePhase = nil, nil
-        pabrikSetPhase(o, resume, why or "Auto Store Blocks selesai")
-        return "next"
-    end
-
-    if o.phase == "refill_block" then
-        local resume = o.resumePhase or Pabrik.ResumePhase or "break"
-        local ok, why = pabrikRefillBlocks(o)
-        if not ok then return pause(why or "Auto Refill Blocks gagal") end
-        o.resumePhase, Pabrik.ResumePhase = nil, nil
-        pabrikSetPhase(o, resume, why or "Auto Refill Blocks selesai")
-        return "next"
-    end
-
     if o.phase == "break" then
         local resumedFromDrop = o.breakDropResume == true
         o.breakDropResume = nil
-        if blocks <= policy.refillAt and not resumedFromDrop then
-            o.resumePhase, Pabrik.ResumePhase = "break", "break"
-            pabrikSetPhase(o, "refill_block", ("block %d mencapai ambang refill %d")
-                :format(blocks, policy.refillAt))
+        if blocks <= 0 and not resumedFromDrop then
+            -- Block habis: tidak ada yang bisa di-place/pukul. Lanjut TANAM bila
+            -- ada seed (panen berikutnya menyusul setelah tumbuh), kalau tidak kembali PANEN.
+            pabrikSetPhase(o, (seeds > 0) and "plant" or "harvest",
+                "block habis, lanjut " .. ((seeds > 0) and "tanam" or "panen"))
             return "next"
         end
         if not breakReady() then return pause("posisi atau grid break belum valid") end
@@ -6984,12 +6819,6 @@ local function pabrikStep(o)
     end
 
     if o.phase == "harvest" then
-        if blocks >= policy.storeAt then
-            o.resumePhase, Pabrik.ResumePhase = "harvest", "harvest"
-            pabrikSetPhase(o, "store_block", ("block %d mencapai ambang simpan %d")
-                :format(blocks, policy.storeAt))
-            return "next"
-        end
         if seeds >= cap and not (Pabrik.Drop and Pabrik.pointSet()) then
             return pause(("seed %d mencapai batas aman tanpa titik drop aktif"):format(seeds))
         end
@@ -7011,7 +6840,15 @@ local function pabrikStep(o)
             end
             o.unreachableAt = nil
             Pabrik.UnreachableCount = 0
-            pabrikSetPhase(o, "wait_growth", "target panen siap tidak tersisa")
+            -- Siklus PANEN -> BREAK -> TANAM: panen selesai (tidak ada pohon siap).
+            -- Lanjut BREAK hanya bila break siap DAN ada block; kalau tidak, tunggu
+            -- pertumbuhan (fase BREAK sendiri mengarahkan ke TANAM/PANEN saat block habis).
+            if breakReady() and blocks > 0 then
+                pabrikSetPhase(o, "break", "panen selesai, lanjut break")
+            else
+                pabrikSetPhase(o, "wait_growth",
+                    (blocks <= 0) and "block habis, menunggu pohon siap" or "break belum siap, menunggu pohon")
+            end
             return "next"
         end
         o.unreachableAt = nil
@@ -7033,7 +6870,6 @@ local function pabrikLoop(runId)
     local o = { seed = Pabrik.SeedId, block = Pabrik.BlockId, drop = true, live = live, phase = "validate" }
     while live() do
         task.wait()
-        o.whole = Pabrik.WholeWorld
         local here = Guard.worldName()
         if not Pabrik.Traveling and Pabrik.Home ~= "" and here ~= Pabrik.Home then
             Pabrik.Status = "Bukan di world pabrik (" .. Pabrik.Home .. "), menunggu..."
@@ -7114,8 +6950,8 @@ function Pabrik.start()
         err = "Block dari seed ini tidak ketemu"
     elseif not err and Pabrik.SupportFilter and (not Pabrik.SupportId or not ItemDB[Pabrik.SupportId]) then
         err = "Pilih block penyangga Pabrik dulu"
-    elseif not err and not Pabrik.WholeWorld and #landRows() == 0 then
-        err = "Atur lahan dulu (tab Lahan)"
+    elseif not err and Pabrik.BreakX < 0 then
+        err = "Atur posisi break dulu (tab Pabrik) — area kerja dihitung dari sini"
     end
     if not err and not Refs.Trees and not findTreeRefs() then
         err = "Data pohon belum tersedia; Pabrik tidak dapat memvalidasi WAIT_GROWTH/HARVEST"
@@ -7134,7 +6970,8 @@ function Pabrik.start()
     if not Refs.Trees then findTreeRefs() end
     Pabrik.BlockId = block
     Pabrik.Home = Guard.worldName()
-    refreshBlockStorageZone()
+    -- Mulai selalu dari awal: reset skip/row/jejak sehingga strip dipindai ulang
+    -- dari BreakX+1, bukan melanjutkan posisi saat fitur terakhir dimatikan.
     table.clear(Pabrik.Skip)
     table.clear(Pabrik.Row)
     table.clear(BadEdge)
@@ -9540,8 +9377,10 @@ local function addNumber(tab, o)
             Step = o.Step or 1,
             Value = { Min = o.Min, Max = o.Max, Default = o.Default },
             Callback = function(v)
+                -- Sebagian build WindUI mengirim tabel {Value=..} bukan angka
+                if type(v) == "table" then v = v.Value or v.Default end
                 v = tonumber(v)
-                if v then o.Callback(v) end
+                if v then o.Callback(math.clamp(v, o.Min, o.Max)) end
             end,
         })
     end)
@@ -9570,7 +9409,9 @@ end)
 
 Box.FarmCtl = box(FarmTab, "Kontrol", true)
 Box.FarmBlock = box(FarmTab, "Block", true)
-Box.FarmSpeed = box(FarmTab, "Mode & Kecepatan", false)
+-- opened=true: box tertutup di beberapa build WindUI mobile tidak bisa dibuka,
+-- bikin kontrol mode & kecepatan kelihatan hilang.
+Box.FarmSpeed = box(FarmTab, "Mode & Kecepatan", true)
 
 safe(function()
     UI.FarmToggle = Box.FarmCtl:Toggle({
@@ -9826,7 +9667,10 @@ safe(function()
         Desc = "Place semua tile dulu, lalu break",
         Values = { "Place + Break", "Break saja", "Place saja" },
         Value = State.Mode,
-        Callback = function(opt) State.Mode = opt end,
+        Callback = function(opt)
+            opt = (type(opt) == "table") and opt[1] or opt
+            if type(opt) == "string" then State.Mode = opt end
+        end,
     })
 end)
 
@@ -9920,6 +9764,8 @@ safe(function()
         Desc = "Hanya item yang bisa di-place",
         Values = { "(memuat...)" },
         Callback = function(opt)
+            -- dropdown bisa mengirim tabel (multi) di sebagian build WindUI
+            opt = (type(opt) == "table") and opt[1] or opt
             local id = tonumber(string.match(opt or "", "%[(%d+)%]$"))
             if id then
                 State.SelectedId = id
@@ -12137,14 +11983,11 @@ do (function()
     local pCtl = box(PTab, "Kontrol", true)
     local pBreak = box(PTab, "Posisi & tile break", true)
     local pDrop = box(PTab, "Drop seed", true)
-    local pInventory = box(PTab, "Inventory block", true)
-    local pStorage = box(PTab, "Block Storage", true)
-    local pabrikCap = math.max(1, math.floor(tonumber(Pabrik.InventoryCap) or 190))
 
     safe(function()
         UI.PabrikToggle = pCtl:Toggle({
             Title = "Jalankan Pabrik",
-            Desc = "Break -> tanam -> panen -> break lagi, seed lebihan di-drop",
+            Desc = "Panen -> break -> tanam -> ulangi, seed lebihan di-drop",
             Value = false,
             Callback = function(on)
                 if on then
@@ -12165,20 +12008,6 @@ do (function()
             Callback = function(opt)
                 local id = tonumber(string.match(opt or "", "%[(%d+)%]$"))
                 if id then Pabrik.SeedId = id end
-            end,
-        })
-    end)
-
-    safe(function()
-        pCtl:Toggle({
-            Title = "Tanam di seluruh world",
-            Desc = "Mati = hanya di lahan (tab Lahan)",
-            Value = Pabrik.WholeWorld,
-            Callback = function(on)
-                Pabrik.WholeWorld = on
-                UI.later("pabrikSupport", function()
-                    if UI.PabrikSupportRefresh then UI.PabrikSupportRefresh(true) end
-                end)
             end,
         })
     end)
@@ -12271,80 +12100,6 @@ do (function()
         Callback = function(v) Pabrik.DropAt = math.floor(v) end,
     })
 
-    addNumber(pInventory, {
-        Title = "Simpan block saat",
-        Desc = "Pabrik pause sampai Block Storage tersedia",
-        Min = 1, Max = pabrikCap, Step = 1, Default = Pabrik.BlockStoreAt,
-        Callback = function(v) Pabrik.BlockStoreAt = math.floor(v) end,
-    })
-
-    addNumber(pInventory, {
-        Title = "Sisakan block storage",
-        Desc = "Jumlah block yang nanti dipertahankan saat Auto Store",
-        Min = 0, Max = pabrikCap - 1, Step = 1, Default = Pabrik.BlockKeep,
-        Callback = function(v) Pabrik.BlockKeep = math.floor(v) end,
-    })
-
-    addNumber(pInventory, {
-        Title = "Refill saat block <=",
-        Desc = "Ambang untuk Auto Refill pada fase BREAK",
-        Min = 0, Max = pabrikCap - 1, Step = 1, Default = Pabrik.RefillAt,
-        Callback = function(v) Pabrik.RefillAt = math.floor(v) end,
-    })
-
-    addNumber(pInventory, {
-        Title = "Target refill block",
-        Desc = "Jumlah block yang dituju setelah Auto Refill",
-        Min = 1, Max = pabrikCap, Step = 1, Default = Pabrik.RefillTarget,
-        Callback = function(v) Pabrik.RefillTarget = math.floor(v) end,
-    })
-
-    safe(function()
-        UI.PabrikStorageWorld = pStorage:Input({
-            Title = "World Block Storage",
-            Desc = "Kosong = world Pabrik ini | WORLD | WORLD:ID",
-            Value = Pabrik.StorageWorld,
-            Placeholder = "STORAGE:1",
-            Callback = function(t)
-                Pabrik.StorageWorld = tostring(t or "")
-                refreshBlockStorageZone()
-            end,
-        })
-    end)
-
-    safe(function()
-        pStorage:Button({
-            Title = "Set posisi Block Storage sekarang",
-            Desc = "Berdiri di titik aman, di luar Break Grid dan jalur kerja",
-            Callback = function()
-                local x, y = Auto.here()
-                if not x then
-                    notify("Pabrik", "Posisi karakter belum siap: " .. tostring(y), 4)
-                    return
-                end
-                Pabrik.StorageX, Pabrik.StorageY = x, y
-                if not string.find(Pabrik.StorageWorld or "", ":", 1, true) then
-                    Pabrik.StorageWorld = Guard.worldName()
-                    if UI.PabrikStorageWorld then pcall(function() UI.PabrikStorageWorld:Set(Pabrik.StorageWorld) end) end
-                end
-                refreshBlockStorageZone()
-                notify("Pabrik", ("Block Storage di (%d,%d) %s"):format(x, y, Pabrik.StorageWorld), 4)
-            end,
-        })
-    end)
-
-    safe(function()
-        pStorage:Button({
-            Title = "Hapus Block Storage",
-            Desc = "Auto Store dan Auto Refill akan pause sampai titik diatur lagi",
-            Callback = function()
-                Pabrik.StorageX, Pabrik.StorageY = -1, -1
-                Pabrik.BlockStorageZone = nil
-                notify("Pabrik", "Block Storage dihapus", 3)
-            end,
-        })
-    end)
-
     local function countKeys(t)
         local n = 0
         for _ in pairs(t) do n += 1 end
@@ -12364,32 +12119,11 @@ do (function()
             -- Updater UI ini tidak memanggil helper Pabrik lokal. Pada executor
             -- pengguna, helper tersebut terbaca nil di closure task UI dan
             -- membuat seluruh status berhenti pada "-".
-            local uiCap = math.max(1, math.floor(tonumber(Pabrik.InventoryCap) or 190))
-            local storeAt = math.clamp(math.floor(tonumber(Pabrik.BlockStoreAt) or 170), 1, uiCap)
-            local refillAt = math.clamp(math.floor(tonumber(Pabrik.RefillAt) or 10), 0, uiCap - 1)
-            local policy = {
-                storeAt = storeAt,
-                keep = math.clamp(math.floor(tonumber(Pabrik.BlockKeep) or 30), 0, storeAt - 1),
-                refillAt = refillAt,
-                refillTarget = math.clamp(math.floor(tonumber(Pabrik.RefillTarget) or 150), refillAt + 1, uiCap),
-            }
             local trees = Pabrik.TreeSummary
             local treeText = trees and ("siap %d | tumbuh %d | unknown %d | unreachable %d")
                 :format(trees.ready or 0, trees.growing or 0, trees.unknown or 0,
                     math.max(trees.unreachable or 0, Pabrik.UnreachableCount or 0))
                 or "belum dipindai"
-            local storageRaw = tostring(Pabrik.StorageWorld or ""):gsub("%s", "")
-            local storageName, storageDoor = string.match(storageRaw, "^([^:]*):(.+)$")
-            if not storageName then storageName = storageRaw end
-            storageName = string.upper(storageName):gsub("[^A-Z0-9]", "")
-            if storageDoor == "" then storageDoor = nil end
-            local storageSet = type(Pabrik.StorageX) == "number" and type(Pabrik.StorageY) == "number"
-                and Pabrik.StorageX >= 0 and Pabrik.StorageY >= 0
-            local storageText = storageSet
-                and ((storageName ~= "" and storageName or "world Pabrik")
-                    .. (storageDoor and (":" .. storageDoor) or "")
-                    .. (" (%d,%d)"):format(Pabrik.StorageX, Pabrik.StorageY))
-                or "belum diatur"
             local txt = table.concat({
                 "Status : " .. (Pabrik.Running and ("JALAN - fase " .. tostring(Pabrik.Phase or "-")) or "BERHENTI"),
                 ("Seed   : %s x%d | block %s x%d"):format(seed and itemName(seed) or "-", seed and invCount(seed) or 0,
@@ -12398,12 +12132,9 @@ do (function()
                     or "belum diatur", countKeys(Pabrik.Tiles)),
                 "Tanam  : " .. support .. (Pabrik.PlantFilterMiss and " | tidak ada posisi cocok saat ini" or ""),
                 "Pohon  : " .. treeText,
-                ("Block  : simpan >= %d, sisakan %d, refill <= %d ke %d")
-                    :format(policy.storeAt, policy.keep, policy.refillAt, policy.refillTarget),
-                "Storage: " .. storageText,
                 ("Drop   : %s | sisakan %d, drop saat >= %d"):format(Pabrik.Drop and dropAt or "mati", Pabrik.Keep, Pabrik.DropAt),
-                ("Hasil  : panen %d | tanam %d | seed drop %d | block simpan %d | refill %d")
-                    :format(Pabrik.Harvested, Pabrik.Planted, Pabrik.Dropped, Pabrik.StoredBlocks, Pabrik.RefilledBlocks),
+                ("Hasil  : panen %d | tanam %d | seed drop %d")
+                    :format(Pabrik.Harvested, Pabrik.Planted, Pabrik.Dropped),
                 "Aksi   : " .. Pabrik.Status,
                 "Flow   : " .. tostring(Pabrik.LastTransition or "-"),
             }, "\n")
