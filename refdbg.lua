@@ -14,7 +14,12 @@ local function say(s)
 	if nPrint % 10 == 0 then task.wait() end
 end
 
-say("mulai | executor: " .. identifyexecutor and tostring(identifyexecutor()) or "-")
+local exName = "-"
+if type(identifyexecutor) == "function" then
+	local okEx, nameEx = pcall(identifyexecutor)
+	if okEx and type(nameEx) == "string" then exName = nameEx end
+end
+say("mulai | executor: " .. exName)
 
 ---------------------------------------------------------------------
 -- 0) Registry module game (Shared)
@@ -29,16 +34,31 @@ if not shared then
 	mode = "Qz registry key=" .. tostring(moduleKey)
 end
 say("Shared: " .. mode .. " | type=" .. type(shared))
-if type(shared) ~= "table" then
+if type(shared) ~= "table" and typeof(shared) ~= "Instance" then
 	say("STOP: registry module game tidak ketemu")
 	return
 end
 
 -- Daftar semua key registry (cek apakah alias module masih sama dgn k .lua)
+-- Registry bisa berupa tabel Lua (Qz) atau Folder Instance (mode lama).
 local regKeys = {}
-for k in pairs(shared) do regKeys[#regKeys + 1] = tostring(k) end
+if type(shared) == "table" then
+	for k in pairs(shared) do regKeys[#regKeys + 1] = tostring(k) end
+else
+	for _, c in ipairs(shared:GetChildren()) do regKeys[#regKeys + 1] = c.Name end
+end
 table.sort(regKeys)
 say("Registry keys (" .. #regKeys .. "): " .. table.concat(regKeys, " "))
+
+-- Nilai registry bisa tabel Lua atau ModuleScript; samakan dulu.
+local function asModule(v)
+	if type(v) == "table" then return v end
+	if typeof(v) == "Instance" and v:IsA("ModuleScript") then
+		local okM, m = pcall(require, v)
+		if okM then return m end
+	end
+	return nil
+end
 
 ---------------------------------------------------------------------
 -- Helper konstanta & upvalue
@@ -87,13 +107,15 @@ end
 ---------------------------------------------------------------------
 -- 1) Module Net: channel yang ada + konstanta send masing-masing
 ---------------------------------------------------------------------
-local netRef = shared.Net
-local netKey = "Net"
+local netRef, netKey = asModule(shared.Net), "Net"
 if type(netRef) ~= "table" then
-	for k, v in pairs(shared) do
-		if type(v) == "table" and type(v.tile) == "table" and type(v.tile.send) == "function" then
-			netRef, netKey = v, tostring(k)
-			break
+	if type(shared) == "table" then
+		for k, v in pairs(shared) do
+			local m = asModule(v)
+			if type(m) == "table" and type(m.tile) == "table" and type(m.tile.send) == "function" then
+				netRef, netKey = m, tostring(k)
+				break
+			end
 		end
 	end
 end
