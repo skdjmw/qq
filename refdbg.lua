@@ -8,9 +8,12 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local nPrint = 0
+local out = {} -- semua baris disimpan untuk clipboard/file di akhir
 local function say(s)
+	s = "[Rocky][REFDBG] " .. tostring(s)
+	out[#out + 1] = s
 	nPrint += 1
-	print("[Rocky][REFDBG] " .. tostring(s))
+	print(s)
 	if nPrint % 10 == 0 then task.wait() end
 end
 
@@ -248,4 +251,30 @@ for _, v in ipairs(gc) do
 end
 if o == 0 then say("TIDAK ada tabel dengan fungsi list()") end
 
-say("selesai (" .. nPrint .. " baris). Salin semua baris [REFDBG] dan kirim balik.")
+say("selesai (" .. nPrint .. " baris).")
+
+---------------------------------------------------------------------
+-- 6) Salin hasil: clipboard + file + 1 pesan konsol utuh
+---------------------------------------------------------------------
+local text = table.concat(out, "\n")
+local copied = false
+if type(setclipboard) == "function" then
+	copied = pcall(setclipboard, text)
+elseif type(toclipboard) == "function" then
+	copied = pcall(toclipboard, text)
+end
+if copied then
+	say("SEMUA output sudah di CLIPBOARD — tinggal Ctrl+V ke chat.")
+else
+	say("Executor tidak punya setclipboard/toclipboard — salin manual dari konsol.")
+end
+if type(writefile) == "function" then
+	local okW, errW = pcall(writefile, "Rocky_refdbg.txt", text)
+	if okW then
+		say("Output juga disimpan ke file: Rocky_refdbg.txt (folder workspace executor)")
+	else
+		say("writefile gagal: " .. tostring(errW))
+	end
+end
+-- Cetak sekali lagi sebagai SATU pesan konsol agar mudah di-select lalu copy.
+print(text)
