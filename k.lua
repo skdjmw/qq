@@ -3980,7 +3980,9 @@ end
 function Anim.place(x, y, id)
     local it = ItemDB[id]
     local seed = it and it.kind == "seed"
-    Anim.swing(x, y, "build")
+    -- Game memakai kind "seed" saat menanam (konstanta handler input punch);
+    -- ikuti supaya pose tangan sama dengan tanam manual. Block tetap "build".
+    Anim.swing(x, y, seed and "seed" or "build")
     if not seed then Anim.puff(x, y) end
 end
 
@@ -6721,6 +6723,15 @@ local function breakReady()
     return Pabrik.BreakX >= 0 and next(Pabrik.Tiles) ~= nil and os.clock() >= (Pabrik.BreakFailUntil or 0)
 end
 
+-- Format sisa waktu pohon. Didefinisikan SEBELUM pabrikStep: fungsi itu memanggilnya
+-- dari fase wait_growth; kalau didefinisikan setelah, dari dalam pabrikStep ia
+-- terbaca global nil ("attempt to call a nil value").
+local function waitText(sec)
+    sec = math.max(0, math.ceil(sec or 0))
+    if sec >= 60 then return ("%dm %dd"):format(sec // 60, sec % 60) end
+    return sec .. " dtk"
+end
+
 -- 1 langkah pabrik. o = { seed, block, drop, breakMode, exclude, live, phase }
 -- Hasil: "drop" | "work" | "move" | "wait" | "break" | "next" | "idle" (+ detik ke pohon siap)
 local function pabrikStep(o)
@@ -6857,12 +6868,6 @@ local function pabrikStep(o)
     end
 
     return pause("fase tidak dikenal: " .. tostring(o.phase))
-end
-
-local function waitText(sec)
-    sec = math.max(0, math.ceil(sec or 0))
-    if sec >= 60 then return ("%dm %dd"):format(sec // 60, sec % 60) end
-    return sec .. " dtk"
 end
 
 local function pabrikLoop(runId)
