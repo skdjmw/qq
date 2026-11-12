@@ -252,6 +252,7 @@ local Misc = {
     Ghost = false,    -- fly + tembus block
     UpHeld = false,   -- tombol ▲ di layar ditahan
     DownHeld = false, -- tombol ▼ di layar ditahan
+    AutoConnect = true, -- deep scan otomatis setelah referensi inti siap (tanpa tombol)
     CustomName = true,          -- watermark nama (selalu aktif, mati hanya saat script ditutup)
     NameText = "Rocky",          -- teks watermark
 }
@@ -1343,7 +1344,7 @@ State.PlaceMs = math.max(State.PlaceMs, 140)
 State.BreakMs = math.max(State.BreakMs, 200)
 Farmer.HarvestMs = math.max(Farmer.HarvestMs, 140)
 Farmer.PlantMs = math.max(Farmer.PlantMs, 140)
-Config.add("Misc", Misc, { "Speed" })
+Config.add("Misc", Misc, { "Speed", "AutoConnect" })
 Config.add("Chat", Spam, { "Texts", "IntervalSec" })
 Config.add("Lahan", Land, { "X0", "X1", "Y0" })
 Config.add("Bangun", Build, { "BlockId", "ThenPabrik", "BreakX", "BreakY", "Tiles" })
@@ -2378,9 +2379,11 @@ local function tryPlace(x, y)
             State.LastAction = "Place " .. itemName(sel) .. " tidak dikonfirmasi world (" .. x .. "," .. y .. ")"
             return "place_failed"
         end
-    elseif Refs.Inv then
-        pcall(function() Refs.Inv:remove(sel, 1) end)
     end
+    -- Kurangi hitung inventori di kedua jalur (dulu hanya non-konfirmasi): server
+    -- tidak menurunkan hitung client untuk tile yang dipasang script, sehingga
+    -- angka block tidak turun secara visual di fase BREAK Pabrik.
+    if Refs.Inv then pcall(function() Refs.Inv:remove(sel, 1) end) end
     local key = x .. "," .. y
     HitCount[key] = nil
     PlacedAt[key] = os.clock()
@@ -12692,6 +12695,15 @@ local function reconnect(show, full)
 end
 
 safe(function()
+    Box.ConnMain:Toggle({
+        Title = "Auto hubungkan",
+        Desc = "Deep scan (Hubungkan ke game) jalan otomatis setelah masuk world",
+        Value = Misc.AutoConnect,
+        Callback = function(on) Misc.AutoConnect = on end,
+    })
+end)
+
+safe(function()
     Box.ConnMain:Button({
         Title = "Hubungkan ke game",
         Desc = "Full scan manual setelah PlayerView masuk world",
@@ -12961,6 +12973,27 @@ end
 task.spawn(function()
     task.wait(0.75) -- beri WindUI waktu render stabil
     reconnect("Rocky v5.2", false)
+    -- Auto deep scan: jalankan "Hubungkan ke game" otomatis sekali per sesi,
+    -- setelah referensi inti siap (sudah di dalam world). Syarat aman: Clear dan
+    -- Farmer tidak sedang jalan (reconnect full menghentikan keduanya). Matikan
+    -- lewat toggle "Auto hubungkan" di tab Koneksi untuk perilaku lama.
+    task.spawn(function()
+        local t0 = os.clock()
+        while alive() and os.clock() - t0 < 180 do
+            if worldReady(Refs.World) and Refs.Inv and readStateRef(Refs.State, true) then break end
+            task.wait(0.5)
+        end
+        if not alive() then return end
+        local waited = 0
+        while alive() and (Clear.Running or Farmer.Running) and waited < 120 do
+            task.wait(1)
+            waited += 1
+        end
+        if alive() and Misc.AutoConnect and (not Refs.SetTile or not Refs.Punch) then
+            task.wait(1)
+            reconnect("Auto", true)
+        end
+    end)
     -- Penjaga dari config dinyalakan setelah data pemain ketemu
     -- (supaya pemain yang sudah ada dicatat dulu)
     if Config.saved("Penjaga", "On") == true and alive() then
